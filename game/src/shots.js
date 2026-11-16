@@ -1,53 +1,121 @@
-import { FIELD, STEP } from './config.js';
-import { SCREEN_TITLE, SCREEN_PLAY, SCREEN_OVER, SCREEN_WIN, SCREEN_SHOP } from './render.js';
+// Screenshot automation handler for THE MAZEJANITOR
+// Handles ?shot=start|play|upgrade|end with window.__shotReady gate
+import { EVENT_WING_CLEAR, EVENT_WIN } from './world.js';
 
-export function stageShot(name, world) {
-  world.reset();
-  if (name === 'upgrade') {
-    world.state.inShop = true;
-    world.state.gold = 500;
-    return { screen: SCREEN_SHOP, best: 0 };
-  }
-  if (name === 'start') {
-    return { screen: SCREEN_TITLE, best: 0 };
-  }
-  if (name !== 'play' && name !== 'end') {
-    return { screen: SCREEN_TITLE, best: 0 };
+export function createShotsController(world, getScreen, setScreen, SCREEN_PLAY, SCREEN_SHOP, SCREEN_WIN) {
+  const urlParams = new URLSearchParams(window.location.search);
+  const shotMode = urlParams.get('shot');
+  if (!shotMode) return null;
+
+  window.__shotReady = false;
+  let elapsed = 0;
+  let settled = false;
+
+  if (shotMode === 'play' || shotMode === 'upgrade' || shotMode === 'end') {
+    setScreen(SCREEN_PLAY);
   }
 
-  const limit = name === 'end' ? 600 : name === 'play' ? 5 : 30;
-  for (let i = 0; i < limit / STEP; i++) {
-    if (name === 'end' && world.state.inShop) {
-      world.advanceWing();
-      continue;
+  function autopilotStep(dt) {
+    const player = world.state.player;
+    const pcx = player.x + player.width / 2;
+    const pcy = player.y + player.height / 2;
+
+    // Find nearest active item
+    let nearest = null;
+    let minDist = Infinity;
+    for (const item of world.state.items) {
+      if (!item.active) continue;
+      const icx = item.x + item.width / 2;
+      const icy = item.y + item.height / 2;
+      const dist = Math.hypot(icx - pcx, icy - pcy);
+      if (dist < minDist) {
+        minDist = dist;
+        nearest = { x: icx, y: icy };
+      }
     }
-    // Autopilot steer toward nearest active item
-    const p = world.state.player;
-    let targetX = p.x;
-    let targetY = p.y;
-    const activeItems = world.state.items.filter(item => item.active);
-    if (activeItems.length > 0) {
-      // Pick nearest
-      let nearest = activeItems[0];
-      let minDist = Math.hypot(nearest.x - p.x, nearest.y - p.y);
-      for (let j = 1; j < activeItems.length; j++) {
-        const d = Math.hypot(activeItems[j].x - p.x, activeItems[j].y - p.y);
-        if (d < minDist) {
-          minDist = d;
-          nearest = activeItems[j];
+
+    let vx = 0;
+    let vy = 0;
+    if (nearest) {
+      const dx = nearest.x - pcx;
+      const dy = nearest.y - pcy;
+      const dist = Math.hypot(dx, dy);
+      if (dist > 2) {
+        vx = dx / dist;
+        vy = dy / dist;
+      }
+    }
+
+    const actionBucket = world.state.fires.length > 0;
+    return world.step(dt, vx, vy, actionBucket, false);
+  }
+
+  function update(dt) {
+    if (settled) return;
+    elapsed += dt;
+
+    if (shotMode === 'start') {
+      if (elapsed > 0.05) {
+        window.__shotReady = true;
+        settled = true;
+      }
+      return;
+    }
+
+    if (shotMode === 'play') {
+      // R10: Stop at about half the wing quota with items still on screen
+      const targetCleans = Math.floor(world.state.quota / 2);
+      if (world.state.cleaned < targetCleans) {
+        autopilotStep(dt);
+      } else {
+        // Allow a split second for popups and particles to settle visibly
+        if (elapsed > 0.2) {
+          window.__shotReady = true;
+          settled = true;
         }
       }
-      targetX = nearest.x;
-      targetY = nearest.y;
+      return;
     }
 
-    const vx = targetX > p.x + 5 ? 1 : targetX < p.x - 5 ? -1 : 0;
-    const vy = targetY > p.y + 5 ? 1 : targetY < p.y - 5 ? -1 : 0;
+    if (shotMode === 'upgrade') {
+      if (getScreen() === SCREEN_PLAY) {
+        const events = autopilotStep(dt);
+        if (events & EVENT_WING_CLEAR || world.state.inShop) {
+          setScreen(SCREEN_SHOP);
+          world.state.shopCursor = 0;
+        }
+      } else if (getScreen() === SCREEN_SHOP) {
+        if (elapsed > 0.3) {
+          window.__shotReady = true;
+          settled = true;
+        }
+      }
+      return;
+    }
 
-    world.step(STEP, vx, vy, false, false);
-    if (world.state.gameOver || world.state.won) break;
+    if (shotMode === 'end') {
+      if (getScreen() === SCREEN_PLAY) {
+        const events = autopilotStep(dt);
+        if (events & EVENT_WING_CLEAR || world.state.inShop) {
+          // In shop, auto-buy speed upgrade if affordable, then advance
+          world.buyUpgrade(0);
+          world.advanceWing();
+          setScreen(SCREEN_PLAY);
+        } else if (events & EVENT_WIN || world.state.won) {
+          setScreen(SCREEN_WIN);
+        }
+      } else if (getScreen() === SCREEN_WIN) {
+        if (elapsed > 0.3) {
+          window.__shotReady = true;
+          settled = true;
+        }
+      }
+    }
   }
 
-  const screen = world.state.won ? SCREEN_WIN : world.state.gameOver ? SCREEN_OVER : SCREEN_PLAY;
-  return { screen, best: world.state.score };
+  return {
+    isActive: true,
+    mode: shotMode,
+    update,
+  };
 }

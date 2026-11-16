@@ -1,5 +1,10 @@
-// Tuning and color constants for THE MAZEJANITOR
-export const FIELD = { width: 1280, height: 720, groundY: 620 };
+// Configuration constants and tuning for THE MAZEJANITOR
+export const FIELD = {
+  width: 1280,
+  height: 720,
+  groundY: 520,
+};
+
 export const STEP = 1 / 60;
 
 export const PLAYER = {
@@ -9,12 +14,14 @@ export const PLAYER = {
 };
 
 export const TOTAL_WINGS = 5;
+
+// Re-tuned wing requirements per R2: tighter timers, higher quotas
 export const WING_CONFIGS = [
-  { wing: 1, time: 50, quota: 8, itemsCount: 10, bonusGold: 100 },
-  { wing: 2, time: 45, quota: 12, itemsCount: 15, bonusGold: 150 },
-  { wing: 3, time: 40, quota: 15, itemsCount: 18, bonusGold: 200 },
-  { wing: 4, time: 35, quota: 18, itemsCount: 22, bonusGold: 250 },
-  { wing: 5, time: 30, quota: 22, itemsCount: 26, bonusGold: 300 },
+  { wing: 1, time: 35, quota: 9, itemsCount: 10, bonusGold: 100 },
+  { wing: 2, time: 32, quota: 14, itemsCount: 15, bonusGold: 150 },
+  { wing: 3, time: 30, quota: 17, itemsCount: 18, bonusGold: 200 },
+  { wing: 4, time: 27, quota: 21, itemsCount: 22, bonusGold: 250 },
+  { wing: 5, time: 25, quota: 25, itemsCount: 26, bonusGold: 300 },
 ];
 
 export const PALETTE = {

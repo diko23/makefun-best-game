@@ -1,79 +1,81 @@
-let audioCtx = null;
-let muted = false;
+// WebAudio synthesizer sound effects for THE MAZEJANITOR
+let audioContext = null;
+let audioMuted = false;
 
-function getAudio() {
-  if (!audioCtx && typeof window !== 'undefined') {
-    const AudioContext = window.AudioContext || window.webkitAudioContext;
-    if (AudioContext) audioCtx = new AudioContext();
+function obtainContext() {
+  if (!audioContext && typeof window !== 'undefined') {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (AudioContextClass) {
+      audioContext = new AudioContextClass();
+    }
   }
-  return audioCtx;
+  return audioContext;
 }
 
 export function toggleMute() {
-  muted = !muted;
-  return muted;
+  audioMuted = !audioMuted;
+  return audioMuted;
 }
 
 export function isMuted() {
-  return muted;
+  return audioMuted;
 }
 
-function playTone(freqs, durations, type = 'sine', gainVal = 0.1) {
-  if (muted) return;
-  const ctx = getAudio();
+function playNoteSequence(frequencies, durations, waveType = 'sine', volume = 0.1) {
+  if (audioMuted) return;
+  const ctx = obtainContext();
   if (!ctx) return;
   if (ctx.state === 'suspended') {
     ctx.resume();
   }
 
-  let time = ctx.currentTime;
-  for (let i = 0; i < freqs.length; i++) {
-    const freq = freqs[i];
-    const dur = durations[i] || 0.1;
+  let startTime = ctx.currentTime;
+  for (let i = 0; i < frequencies.length; i++) {
+    const freq = frequencies[i];
+    const duration = durations[i] || 0.1;
     if (freq <= 0) {
-      time += dur;
+      startTime += duration;
       continue;
     }
+
     const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = type;
-    osc.frequency.setValueAtTime(freq, time);
+    const gainNode = ctx.createGain();
 
-    gain.gain.setValueAtTime(gainVal, time);
-    gain.gain.exponentialRampToValueAtTime(0.0001, time + dur);
+    osc.type = waveType;
+    osc.frequency.setValueAtTime(freq, startTime);
 
-    osc.connect(gain);
-    gain.connect(ctx.destination);
+    gainNode.gain.setValueAtTime(volume, startTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
 
-    osc.start(time);
-    osc.stop(time + dur);
-    time += dur;
+    osc.connect(gainNode);
+    gainNode.connect(ctx.destination);
+
+    osc.start(startTime);
+    osc.stop(startTime + duration);
+    startTime += duration;
   }
 }
 
 export const sound = {
   clean() {
-    playTone([440, 880], [0.05, 0.08], 'triangle', 0.08);
+    playNoteSequence([440, 880], [0.05, 0.08], 'triangle', 0.08);
   },
   missionDone() {
-    playTone([523, 659, 784, 1046], [0.08, 0.08, 0.08, 0.15], 'sine', 0.1);
+    playNoteSequence([523, 659, 784, 1046], [0.08, 0.08, 0.08, 0.15], 'sine', 0.1);
   },
   win() {
-    playTone([440, 554, 659, 880, 1108], [0.1, 0.1, 0.1, 0.1, 0.3], 'triangle', 0.12);
+    playNoteSequence([440, 554, 659, 880, 1108], [0.1, 0.1, 0.1, 0.1, 0.3], 'triangle', 0.12);
   },
   lose() {
-    playTone([220, 180, 140], [0.15, 0.15, 0.3], 'sawtooth', 0.12);
+    playNoteSequence([220, 180, 140], [0.15, 0.15, 0.3], 'sawtooth', 0.12);
   },
   eventSting() {
-    playTone([300, 600, 450, 750], [0.08, 0.08, 0.08, 0.2], 'square', 0.08);
-  },
-  douse() {
-    playTone([600, 300], [0.06, 0.1], 'sine', 0.1);
+    playNoteSequence([300, 600, 450, 750], [0.08, 0.08, 0.08, 0.2], 'square', 0.08);
   },
   bucket() {
-    playTone([200, 400], [0.05, 0.1], 'triangle', 0.1);
+    playNoteSequence([200, 400], [0.05, 0.1], 'triangle', 0.1);
   },
   buy() {
-    playTone([587, 880], [0.08, 0.12], 'sine', 0.1);
-  }
+    playNoteSequence([587, 880], [0.08, 0.12], 'sine', 0.1);
+  },
 };

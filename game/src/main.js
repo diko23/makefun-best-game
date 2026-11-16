@@ -1,162 +1,279 @@
-// Boot and game loop for THE MAZEJANITOR
-import { BEST_KEY, STEP } from './config.js';
+// Main game loop, canvas viewport, and screen orchestration for THE MAZEJANITOR
+import { FIELD, STEP, BEST_KEY } from './config.js';
 import { createRandom } from './random.js';
-import { createWorld, EVENT_OVER, EVENT_WIN, EVENT_MISSION } from './world.js';
-import { ACTION_CONFIRM, ACTION_PAUSE, ACTION_MUTE, ACTION_BUCKET, ACTION_UP, ACTION_DOWN, createInput } from './input.js';
-import { createRenderer, SCREEN_TITLE, SCREEN_PLAY, SCREEN_PAUSED, SCREEN_SHOP, SCREEN_OVER, SCREEN_WIN } from './render.js';
-import { stageShot } from './shots.js';
 import { toggleMute } from './audio.js';
+import { createWorld, EVENT_WING_CLEAR, EVENT_WIN, EVENT_OVER } from './world.js';
+import {
+  createInput,
+  ACTION_CONFIRM,
+  ACTION_BUCKET,
+  ACTION_PAUSE,
+  ACTION_MUTE,
+  ACTION_UP,
+  ACTION_DOWN,
+} from './input.js';
+import {
+  drawTitle,
+  drawShop,
+  drawPlay,
+  drawPause,
+  drawGameOver,
+  drawWin,
+} from './render.js';
+import { createShotsController } from './shots.js';
 
-const MAX_FRAME = 0.25;
-const params = new URLSearchParams(window.location.search);
-const shot = params.get('shot');
-const seedParam = Number.parseInt(params.get('seed') ?? '', 10);
-const seed = Number.isInteger(seedParam) ? seedParam : Math.floor(Math.random() * 4294967296);
+const SCREEN_TITLE = 0;
+const SCREEN_PLAY = 1;
+const SCREEN_SHOP = 2;
+const SCREEN_PAUSED = 3;
+const SCREEN_OVER = 4;
+const SCREEN_WIN = 5;
 
 const canvas = document.getElementById('game');
-const status = document.getElementById('status');
-const world = createWorld(createRandom(seed));
-const renderer = createRenderer(canvas);
+const ctx = canvas.getContext('2d');
+const statusElem = document.getElementById('status');
 
-function readBest() {
-  try {
-    return Number.parseInt(window.localStorage.getItem(BEST_KEY) ?? '0', 10) || 0;
-  } catch {
-    return 0;
-  }
+let bestScore = 0;
+try {
+  const saved = localStorage.getItem(BEST_KEY);
+  if (saved) bestScore = parseInt(saved, 10) || 0;
+} catch {
+  // localStorage may be disabled or sandboxed
 }
 
-function saveBest(value) {
-  try {
-    window.localStorage.setItem(BEST_KEY, String(value));
-  } catch {}
-}
-
-function runShot(name) {
-  const scene = stageShot(name, world);
-  renderer.draw(world.state, scene.screen, scene.best);
-  window.__shotReady = true;
-}
-
-function runGame() {
-  const input = createInput(canvas);
-  let screen = SCREEN_TITLE;
-  let best = readBest();
-  let accumulator = 0;
-  let last = performance.now();
-
-  function announce(msg) {
-    status.textContent = msg;
-  }
-
-  function startGame() {
-    world.reset();
-    accumulator = 0;
-    screen = SCREEN_PLAY;
-    announce('Shift started. Clean the dungeon!');
-  }
-
-  function endGame(won) {
-    screen = won ? SCREEN_WIN : SCREEN_OVER;
-    if (world.state.score > best) {
-      best = world.state.score;
-      saveBest(best);
+function saveBestScore(score) {
+  if (score > bestScore) {
+    bestScore = score;
+    try {
+      localStorage.setItem(BEST_KEY, String(bestScore));
+    } catch {
+      // ignore
     }
-    announce(`Shift ended. Score: ${world.state.score}. Best: ${best}.`);
   }
+}
 
-  let cachedActionBucket = false;
+function updateStatus(text) {
+  if (statusElem) {
+    statusElem.textContent = text;
+  }
+}
 
-  function handleActions() {
-    const actions = input.takeActions();
+// Letterboxing viewport
+let view = { scale: 1, offsetX: 0, offsetY: 0 };
+function updateView() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  canvas.width = Math.floor(w * dpr);
+  canvas.height = Math.floor(h * dpr);
 
-    if (actions & ACTION_MUTE) {
+  const scale = Math.min(canvas.width / FIELD.width, canvas.height / FIELD.height);
+  const offsetX = (canvas.width - FIELD.width * scale) / 2;
+  const offsetY = (canvas.height - FIELD.height * scale) / 2;
+  view = { scale, offsetX, offsetY };
+}
+
+window.addEventListener('resize', updateView);
+updateView();
+
+const input = createInput(canvas, () => view);
+
+// Seeded random for ?shot= or timestamp for normal play
+const urlParams = new URLSearchParams(window.location.search);
+const shotParam = urlParams.get('shot');
+const seed = shotParam ? 0xcafe : (Date.now() ^ (Math.random() * 0x100000000));
+const random = createRandom(seed);
+const world = createWorld(random);
+
+let screen = SCREEN_TITLE;
+function setScreen(s) {
+  screen = s;
+}
+
+if (typeof window !== 'undefined') {
+  window.__game = { world, getScreen: () => screen };
+}
+
+const shotsController = createShotsController(
+  world,
+  () => screen,
+  setScreen,
+  SCREEN_PLAY,
+  SCREEN_SHOP,
+  SCREEN_WIN
+);
+
+// Tab visibility auto-pause
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && screen === SCREEN_PLAY && !shotsController) {
+    screen = SCREEN_PAUSED;
+  }
+});
+
+let lastTime = performance.now();
+let accumulator = 0;
+let animTime = 0;
+const MAX_FRAME = 0.25;
+
+function frame(now) {
+  const elapsed = Math.min((now - lastTime) / 1000, MAX_FRAME);
+  lastTime = now;
+  accumulator += elapsed;
+  animTime += elapsed;
+
+  while (accumulator >= STEP) {
+    accumulator -= STEP;
+
+    // Handle mute across all screens
+    if (input.consumeAction(ACTION_MUTE)) {
       toggleMute();
     }
-    if (actions & ACTION_BUCKET) {
-      cachedActionBucket = true;
-    }
 
-    if (screen === SCREEN_TITLE || screen === SCREEN_OVER || screen === SCREEN_WIN) {
-      if (actions & ACTION_CONFIRM) {
-        startGame();
-      }
-    } else if (screen === SCREEN_SHOP) {
-      if (actions & ACTION_UP) {
-        world.state.shopCursor = (world.state.shopCursor - 1 + 5) % 5;
-      } else if (actions & ACTION_DOWN) {
-        world.state.shopCursor = (world.state.shopCursor + 1) % 5;
-      } else if (actions & ACTION_CONFIRM) {
-        if (world.state.shopCursor === 4) {
+    if (shotsController) {
+      shotsController.update(STEP);
+    } else {
+      // Normal gameplay orchestration
+      if (screen === SCREEN_TITLE) {
+        input.discardActions(ACTION_UP, ACTION_DOWN, ACTION_BUCKET, ACTION_PAUSE);
+        // R12: Do NOT step the world on the title screen
+        if (input.consumeAction(ACTION_CONFIRM) || input.getPendingClick()) {
+          input.clearActions();
+          world.reset();
+          screen = SCREEN_PLAY;
+          updateStatus('Game started. Clean items to meet the wing quota!');
+        }
+      } else if (screen === SCREEN_PLAY) {
+        // Discard irrelevant queued actions during play per R6
+        input.discardActions(ACTION_CONFIRM, ACTION_UP, ACTION_DOWN);
+
+        if (input.consumeAction(ACTION_PAUSE)) {
+          input.clearActions();
+          screen = SCREEN_PAUSED;
+          updateStatus('Game paused.');
+        } else {
+          // Click-to-move during play per R6
+          const click = input.getPendingClick();
+          if (click) {
+            input.setMoveTarget(click);
+          }
+
+          const { vx, vy } = input.getMovement(world.state.player);
+          const actionBucket = input.consumeAction(ACTION_BUCKET);
+          const events = world.step(STEP, vx, vy, actionBucket, false);
+
+          if ((events & EVENT_WING_CLEAR) || world.state.inShop) {
+            input.clearMoveTarget();
+            input.clearActions();
+            screen = SCREEN_SHOP;
+            updateStatus(`Wing cleared! Upgrade shop open. Available gold: ${world.state.gold}g`);
+          } else if ((events & EVENT_WIN) || world.state.won) {
+            input.clearMoveTarget();
+            input.clearActions();
+            screen = SCREEN_WIN;
+            saveBestScore(world.state.score);
+            updateStatus(`Victory! All wings completed! Final score: ${world.state.score}`);
+          } else if ((events & EVENT_OVER) || world.state.gameOver) {
+            input.clearMoveTarget();
+            input.clearActions();
+            screen = SCREEN_OVER;
+            saveBestScore(world.state.score);
+            updateStatus(`Game over! Time expired. Final score: ${world.state.score}`);
+          }
+        }
+      } else if (screen === SCREEN_SHOP) {
+        input.discardActions(ACTION_BUCKET);
+        // Mouse row selection and buying per R6
+        const click = input.getPendingClick();
+        if (click) {
+          input.discardActions(ACTION_CONFIRM);
+          const row = input.getShopRowAt(click.x, click.y);
+          if (row !== -1) {
+            if (row !== world.state.shopCursor) {
+              world.state.shopCursor = row;
+            } else {
+              if (row === 4) {
+                input.clearActions();
+                world.advanceWing();
+                screen = SCREEN_PLAY;
+                updateStatus(`Entering Wing ${world.state.wing}`);
+              } else {
+                world.buyUpgrade(row);
+              }
+            }
+          }
+        }
+
+        // Keyboard shop navigation
+        if (input.consumeAction(ACTION_UP)) {
+          world.state.shopCursor = (world.state.shopCursor + 4) % 5;
+        }
+        if (input.consumeAction(ACTION_DOWN)) {
+          world.state.shopCursor = (world.state.shopCursor + 1) % 5;
+        }
+        if (input.consumeAction(ACTION_CONFIRM)) {
+          if (world.state.shopCursor === 4) {
+            input.clearActions();
+            world.advanceWing();
+            screen = SCREEN_PLAY;
+            updateStatus(`Entering Wing ${world.state.wing}`);
+          } else {
+            world.buyUpgrade(world.state.shopCursor);
+          }
+        }
+        if (input.consumeAction(ACTION_PAUSE)) {
+          input.clearActions();
           world.advanceWing();
           screen = SCREEN_PLAY;
-          announce(`Wing ${world.state.wing} started!`);
-        } else {
-          world.buyUpgrade(world.state.shopCursor);
+          updateStatus(`Entering Wing ${world.state.wing}`);
+        }
+      } else if (screen === SCREEN_PAUSED) {
+        input.discardActions(ACTION_UP, ACTION_DOWN, ACTION_BUCKET);
+        if (input.consumeAction(ACTION_PAUSE) || input.consumeAction(ACTION_CONFIRM) || input.getPendingClick()) {
+          input.clearActions();
+          screen = SCREEN_PLAY;
+          updateStatus('Game resumed.');
+        }
+      } else if (screen === SCREEN_OVER || screen === SCREEN_WIN) {
+        input.discardActions(ACTION_UP, ACTION_DOWN, ACTION_BUCKET, ACTION_PAUSE);
+        if (input.consumeAction(ACTION_CONFIRM) || input.getPendingClick()) {
+          input.clearActions();
+          world.reset();
+          screen = SCREEN_PLAY;
+          updateStatus('Game restarted.');
         }
       }
-    } else if (screen === SCREEN_PLAY) {
-      if (actions & ACTION_PAUSE) {
-        screen = SCREEN_PAUSED;
-        announce('Paused.');
-      }
-    } else if (screen === SCREEN_PAUSED) {
-      if (actions & (ACTION_PAUSE | ACTION_CONFIRM)) {
-        screen = SCREEN_PLAY;
-        announce('Playing.');
-      }
     }
   }
 
-  function step() {
-    if (screen === SCREEN_TITLE) {
-      world.step(STEP, 0, 0, false, true);
-      return;
-    }
-    if (screen === SCREEN_SHOP) {
-      return;
-    }
+  // Render pipeline
+  ctx.fillStyle = '#0f0804';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    const actionBucket = cachedActionBucket;
-    cachedActionBucket = false;
+  ctx.save();
+  ctx.translate(view.offsetX, view.offsetY);
+  ctx.scale(view.scale, view.scale);
 
-    const events = world.step(STEP, input.vx(), input.vy(), actionBucket, false);
-    if (events & EVENT_MISSION) {
-      screen = SCREEN_SHOP;
-      announce('Entered upgrade shop between wings.');
-    } else if (events & EVENT_OVER) {
-      endGame(false);
-    } else if (events & EVENT_WIN) {
-      endGame(true);
-    }
+  if (screen === SCREEN_TITLE) {
+    drawTitle(ctx, bestScore, animTime);
+  } else if (screen === SCREEN_PLAY) {
+    drawPlay(ctx, world.state, animTime);
+  } else if (screen === SCREEN_SHOP) {
+    drawPlay(ctx, world.state, animTime);
+    drawShop(ctx, world.state);
+  } else if (screen === SCREEN_PAUSED) {
+    drawPlay(ctx, world.state, animTime);
+    drawPause(ctx);
+  } else if (screen === SCREEN_OVER) {
+    drawPlay(ctx, world.state, animTime);
+    drawGameOver(ctx, world.state, bestScore);
+  } else if (screen === SCREEN_WIN) {
+    drawPlay(ctx, world.state, animTime);
+    drawWin(ctx, world.state, bestScore);
   }
 
-  function frame(now) {
-    requestAnimationFrame(frame);
-    accumulator += Math.min((now - last) / 1000, MAX_FRAME);
-    last = now;
-    handleActions();
-    if (screen === SCREEN_TITLE || screen === SCREEN_PLAY) {
-      while (accumulator >= STEP && (screen === SCREEN_TITLE || screen === SCREEN_PLAY)) {
-        step();
-        accumulator -= STEP;
-      }
-    } else {
-      accumulator = 0;
-    }
-    renderer.draw(world.state, screen, best);
-  }
+  ctx.restore();
 
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden && screen === SCREEN_PLAY) {
-      screen = SCREEN_PAUSED;
-      announce('Paused.');
-    }
-  });
-
-  announce('THE MAZEJANITOR. Press Space or click to start.');
   requestAnimationFrame(frame);
 }
 
-if (shot) runShot(shot);
-else runGame();
+requestAnimationFrame(frame);
