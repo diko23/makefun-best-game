@@ -1,19 +1,15 @@
-// A tiny static server for game/ (Node 22, standard library only), so an entry can be played
-// locally without a build step: `node serve.ts` serves game/ on http://localhost:8080.
-// It sends the MIME types a browser game needs, refuses any path outside game/, and otherwise
-// does nothing clever: this is a development convenience, not a web server for the internet.
+// Lightweight development server for THE MAZEJANITOR
 import { createReadStream, statSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const root = resolve(fileURLToPath(new URL('./game', import.meta.url)));
-const args = process.argv.slice(2);
-const portIndex = args.indexOf('--port');
-const requested = portIndex === -1 ? 8080 : Number(args[portIndex + 1]);
-const port = Number.isInteger(requested) && requested > 0 && requested < 65536 ? requested : 8080;
+const gameDir = resolve(fileURLToPath(new URL('./game', import.meta.url)));
+const portArgIndex = process.argv.indexOf('--port');
+const specifiedPort = portArgIndex !== -1 ? Number(process.argv[portArgIndex + 1]) : 8080;
+const port = Number.isInteger(specifiedPort) && specifiedPort > 0 && specifiedPort < 65536 ? specifiedPort : 8080;
 
-const MIME: Record<string, string> = {
+const CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8',
@@ -27,46 +23,51 @@ const MIME: Record<string, string> = {
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon',
   '.woff2': 'font/woff2',
-  '.glb': 'model/gltf-binary',
-  '.gltf': 'model/gltf+json',
-  '.bin': 'application/octet-stream',
-  '.wasm': 'application/wasm',
-  '.wav': 'audio/wav',
-  '.mp3': 'audio/mpeg',
-  '.ogg': 'audio/ogg',
   '.txt': 'text/plain; charset=utf-8',
 };
 
-createServer((request, response) => {
-  const url = new URL(request.url ?? '/', 'http://localhost');
-  let pathname: string;
+const server = createServer((req, res) => {
+  const reqUrl = new URL(req.url ?? '/', 'http://localhost');
+  let decodedPath: string;
   try {
-    pathname = decodeURIComponent(url.pathname);
+    decodedPath = decodeURIComponent(reqUrl.pathname);
   } catch {
-    response.writeHead(400).end('bad request');
+    res.writeHead(400).end('Bad Request');
     return;
   }
-  if (pathname.endsWith('/')) pathname += 'index.html';
-  const file = resolve(join(root, normalize(pathname)));
-  if (file !== root && !file.startsWith(root + sep)) {
-    response.writeHead(403).end('forbidden');
+
+  if (decodedPath.endsWith('/')) {
+    decodedPath += 'index.html';
+  }
+
+  const filePath = resolve(join(gameDir, normalize(decodedPath)));
+  if (filePath !== gameDir && !filePath.startsWith(gameDir + sep)) {
+    res.writeHead(403).end('Forbidden');
     return;
   }
-  let size: number;
+
+  let fileSize = 0;
   try {
-    const stats = statSync(file);
-    if (!stats.isFile()) throw new Error('not a file');
-    size = stats.size;
+    const fileStat = statSync(filePath);
+    if (!fileStat.isFile()) {
+      res.writeHead(404).end('Not Found');
+      return;
+    }
+    fileSize = fileStat.size;
   } catch {
-    response.writeHead(404).end('not found');
+    res.writeHead(404).end('Not Found');
     return;
   }
-  response.writeHead(200, {
-    'content-type': MIME[extname(file).toLowerCase()] ?? 'application/octet-stream',
-    'content-length': size,
+
+  const ext = extname(filePath).toLowerCase();
+  res.writeHead(200, {
+    'content-type': CONTENT_TYPES[ext] ?? 'application/octet-stream',
+    'content-length': fileSize,
     'cache-control': 'no-store',
   });
-  createReadStream(file).pipe(response);
-}).listen(port, '127.0.0.1', () => {
-  console.log(`game/ is on http://localhost:${port}`);
+  createReadStream(filePath).pipe(res);
+});
+
+server.listen(port, '127.0.0.1', () => {
+  console.log(`Serving game/ at http://localhost:${port}`);
 });
